@@ -1,3 +1,4 @@
+
 # bot.py - Telegram Matchmaking Bot (Webhook Edition)
 # A flirty Python Telegram bot for profile setup, matchmaking, and instant chats.
 # Built with python-telegram-bot v20+. Switched to webhooks for better scalability
@@ -110,8 +111,9 @@ async def get_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show potential matches (simple demo: assume other users exist)
     matches = find_matches(user_id)
     if matches:
+        # Create one button per match (each on its own row)
         keyboard = [[InlineKeyboardButton(
-            f"Chat with {users[match]['name']}", callback_data=f"chat_with_{match}")]]
+            f"Chat with {users[m]['name']}", callback_data=f"chat_with_{m}")] for m in matches]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
             f"Profile saved, {context.user_data['name']}! 🎉 Found some matches:\n\n{matches_text(matches)}",
