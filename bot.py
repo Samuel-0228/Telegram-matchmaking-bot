@@ -26,11 +26,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Conversation states
-NAME, AGE, GENDER, BIO, PREFERENCE, LOCATION = range(6)
+NAME, AGE, GENDER, BIO, PREFERENCE, LOCATION, INSTAGRAM = range(7)
 
 # Simple in-memory storage for users and chats (use a DB like SQLite/Redis in production)
-users = {}  # {user_id: {"name": ..., "age": ..., ...}}
+users = {}  # {user_id: {"name": ..., "age": ..., "telegram_username": ..., "instagram": ...}}
 active_chats = {}  # {user_id: matched_user_id}
+revealed = {}  # {user_id: bool} - tracks if user has revealed in current chat
 
 
 async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -85,12 +86,26 @@ async def get_preference(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Collect location and finalize profile."""
+    """Collect location and prompt for Instagram."""
     context.user_data["location"] = update.message.text.strip()
+    await update.message.reply_text("Got it! 📱 Optional: Your Instagram handle? (e.g., @yourhandle, 'yourhandle', or 'skip' to pass)")
+    return INSTAGRAM
+
+
+async def get_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collect Instagram and finalize profile."""
+    ig = update.message.text.strip().lower()
+    if ig in ['skip', 'none', 'pass']:
+        ig = None
+    elif ig.startswith('@'):
+        ig = ig[1:]
+    context.user_data["instagram"] = ig
 
     # Save full profile
     user_id = update.effective_user.id
-    users[user_id] = context.user_data.copy()
+    profile = context.user_data.copy()
+    profile["telegram_username"] = update.effective_user.username  # May be None
+    users[user_id] = profile
 
     # Show potential matches (simple demo: assume other users exist)
     matches = find_matches(user_id)
@@ -128,6 +143,7 @@ def get_profile_conversation_handler():
             BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bio)],
             PREFERENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_preference)],
             LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
+            INSTAGRAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_instagram)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
@@ -171,11 +187,14 @@ async def chat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if active_chats.get(user_id) != match_id:
         active_chats[user_id] = match_id
         active_chats[match_id] = user_id
+        # Reset reveal flags for new chat
+        revealed[user_id] = False
+        revealed[match_id] = False
 
     await query.edit_message_text(
-        f"🔥 Starting anonymous chat with {users.get(match_id, {}).get('name', 'a match')}! Say hi. (Use /reveal to unmask, /end to stop)"
+        f"🔥 Starting anonymous chat with {users.get(match_id, {}).get('name', 'a match')}! Say hi. (Use /reveal to share your real info when ready, /end to stop)"
     )
-    await context.bot.send_message(match_id, f"💕 Someone wants to chat! Reply away. (/reveal or /end)")
+    await context.bot.send_message(match_id, f"💕 Someone wants to chat anonymously! Reply away. (/reveal to agree and share your Telegram/IG when you're ready, /end to stop)")
 
 
 async def handle_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,12 +206,19 @@ async def handle_chat_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("👋 Not in an active chat? Use /start to begin!")
         return
 
-    # Forward message to match (anonymously) - no extra reply to avoid duplication
+    # Determine prefix based on mutual reveal
+    if revealed.get(user_id) and revealed.get(match_id):
+        sender_name = users[user_id]['name']
+        prefix = f"{sender_name}: "
+    else:
+        prefix = "*Anonymous Crush:* "
+
+    # Forward message to match
     await context.bot.send_message(
         match_id,
-        f"😏 *Anonymous Crush:* {update.message.text}\n\n(Reply here! /reveal or /end)"
+        f"😏 {prefix}{update.message.text}\n\n(Reply here! /reveal to share your real self, /end to stop)"
     )
-    # Removed "Message sent!" reply to prevent duplication with user's own message
+    # No extra reply to avoid duplication
 
 
 async def end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,15 +227,18 @@ async def end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     match_id = active_chats.pop(user_id, None)
     if match_id:
         active_chats.pop(match_id, None)  # Unpair both
-        await update.message.reply_text("Chat ended. Till next time! 👋 Find new matches after /start.")
+        # Reset reveals
+        revealed.pop(user_id, None)
+        revealed.pop(match_id, None)
+        await update.message.reply_text("Chat ended safely. Till next time! 👋 Find new matches after /start.")
         if match_id in users:  # Ensure match exists
-            await context.bot.send_message(match_id, "Your chat partner said goodbye. 💔 New matches await!")
+            await context.bot.send_message(match_id, "Your chat partner ended the convo. Stay safe! 💔 New matches await.")
     else:
         await update.message.reply_text("No active chat to end.")
 
 
 async def reveal_identity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reveal identities in active chat."""
+    """Reveal identities (with handles) after agreement - shares mutually if both have revealed."""
     user_id = update.effective_user.id
     match_id = active_chats.get(user_id)
 
@@ -217,18 +246,53 @@ async def reveal_identity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No one to reveal to yet! Start a chat first.")
         return
 
+    # Set reveal flag
+    revealed[user_id] = True
+
     user_profile = users.get(
         user_id, {"name": "Mystery Person", "age": "?", "location": "?", "bio": "..."})
-    match_profile = users.get(
-        match_id, {"name": "Mystery Person", "age": "?", "location": "?", "bio": "..."})
+    tg_username = user_profile.get("telegram_username")
+    ig_handle = user_profile.get("instagram")
 
-    reveal_msg = f"🎭 Reveal! I'm {user_profile['name']}, {user_profile['age']}, from {user_profile['location']}. Bio: {user_profile['bio']}"
-    await update.message.reply_text(reveal_msg)
+    reveal_msg = (
+        f"🎭 You revealed! I'm {user_profile['name']}, {user_profile['age']}, from {user_profile['location']}. "
+        f"Bio: {user_profile['bio']}\n"
+        f"Telegram: @{tg_username or 'Not set (add one in Telegram settings)'}\n"
+        f"Instagram: @{ig_handle or 'Not shared'}"
+    )
+    await update.message.reply_text(reveal_msg + "\n\nNow chatting with real vibes—add them on IG/Telegram to continue face-to-face! 😘")
 
+    # Always send revealer's info to match
     await context.bot.send_message(
         match_id,
-        f"🎭 Your crush revealed: {reveal_msg}\n\nContinue chatting or /end?"
+        f"🎭 Your chat partner revealed their real self!\n{reveal_msg}\n\n"
+        f"Add them on Telegram/IG to chat directly (safer & more fun!). Reply here or /reveal to share yours too."
     )
+
+    # If match has also revealed, send mutual full info to both
+    if revealed.get(match_id):
+        match_profile = users.get(
+            match_id, {"name": "Mystery Person", "age": "?", "location": "?", "bio": "..."})
+        match_tg = match_profile.get("telegram_username")
+        match_ig = match_profile.get("instagram")
+
+        mutual_msg = (
+            f"💕 Mutual reveal unlocked! Their full deets:\n"
+            f"I'm {match_profile['name']}, {match_profile['age']}, from {match_profile['location']}. "
+            f"Bio: {match_profile['bio']}\n"
+            f"Telegram: @{match_tg or 'Not set'}\n"
+            f"Instagram: @{match_ig or 'Not shared'}"
+        )
+
+        # Send to user
+        await context.bot.send_message(user_id, mutual_msg + "\n\nConnect directly now—chat's open here too! /end when done.")
+
+        # Send to match (symmetric)
+        await context.bot.send_message(
+            match_id,
+            mutual_msg.replace(
+                "I'm", "They're") + "\n\nBoth revealed—time for real faces! Add on IG/Telegram. /end to wrap up."
+        )
 
 
 def main():
