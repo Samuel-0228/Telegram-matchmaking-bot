@@ -74,7 +74,7 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_bio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Collect and store bio."""
     context.user_data["bio"] = update.message.text.strip()
-    await update.message.reply_text("Sounds intriguing! ❤️ What are you looking for (preferences)?")
+    await update.message.reply_text("Sounds intriguing! ❤️ What are you looking for (male or female)?")
     return PREFERENCE
 
 
@@ -88,7 +88,7 @@ async def get_preference(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Collect location and prompt for Instagram."""
     context.user_data["location"] = update.message.text.strip()
-    await update.message.reply_text("Got it! 📱 Optional: Your Instagram handle? (e.g., @yourhandle, 'yourhandle', or 'skip' to pass)")
+    await update.message.reply_text("Got it! 📱Your Instagram handle? (e.g., @yourhandle, 'yourhandle')")
     return INSTAGRAM
 
 
