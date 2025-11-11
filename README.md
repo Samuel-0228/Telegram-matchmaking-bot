@@ -47,7 +47,7 @@ It’s designed for **webhook-based deployments**, meaning Telegram **pushes upd
 ### 1. Clone this repo
 
 ```bash
-git clone https://github.com/yourusername/telegram-matchmaking-bot.git
+git clone https://github.com/samuel-0228/telegram-matchmaking-bot.git
 cd telegram-matchmaking-bot
 ```
 
